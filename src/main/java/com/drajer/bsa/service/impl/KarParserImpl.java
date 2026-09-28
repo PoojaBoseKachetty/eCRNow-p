@@ -322,8 +322,18 @@ public class KarParserImpl implements KarParser {
 
       KnowledgeArtifactRepository repo = karService.getKARByUrl(entry.getKey());
 
+      // Snapshot of the previously persisted state, used to detect whether this repo actually
+      // needs to be saved again. Null means the repo is new, so it must always be saved.
+      Map<String, Boolean> previousAvailability = null;
+      Boolean previousStatus = null;
+
       if (repo != null) {
         logger.info(" Adding Artifacts to existing repo {}", entry.getKey());
+        previousStatus = repo.getRepoStatus();
+        previousAvailability = new HashMap<>();
+        for (KnowledgeArtifactSummaryInfo info : repo.getKarsInfo()) {
+          previousAvailability.put(info.getVersionUniqueId(), info.getKarAvailable());
+        }
         repo.addKars(localKars.get(entry.getKey()));
         kars = repo.getKarsInfo();
         repo.setRepoStatus(true);
@@ -359,8 +369,23 @@ public class KarParserImpl implements KarParser {
             }
           });
 
-      // Save the repo.
-      karService.saveOrUpdate(repo);
+      // Only save if the repo is new, or its status/KAR availability actually changed. This
+      // avoids issuing redundant UPDATE statements when the KAR is already loaded and unchanged,
+      // e.g. on every app restart when the KAR file on disk hasn't changed.
+      Map<String, Boolean> currentAvailability = new HashMap<>();
+      for (KnowledgeArtifactSummaryInfo info : kars) {
+        currentAvailability.put(info.getVersionUniqueId(), info.getKarAvailable());
+      }
+      boolean unchanged =
+          previousAvailability != null
+              && Boolean.TRUE.equals(previousStatus)
+              && previousAvailability.equals(currentAvailability);
+
+      if (!unchanged) {
+        karService.saveOrUpdate(repo);
+      } else {
+        logger.info(" KAR repository {} is unchanged, skipping database update ", entry.getKey());
+      }
     }
 
     logger.info(" Number of Repos to be disabled {}", inActiveRepos.size());
